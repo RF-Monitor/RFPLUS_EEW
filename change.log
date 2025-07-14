@@ -1,0 +1,23 @@
+2024-01-19
+[new]RFPLUS 新增每個警報的獨特id
+2024-02-25
+[debug] if(alert_list["id"] != RFPLUS_first["id"]) => if(alert_list[i]["id"] != RFPLUS_first["id"])
+2024-03-14
+[new]建立新檔案「RFPLUS2」取代原檔案
+2024-03-15
+[new]將RFPLUS的rate計算改為使用新算法
+[change]改變生成RFPLUS速報檔案的檔名
+2024-03-18
+[new]新增writestream紀錄每次發報
+2024-03-18
+[new]新增發報條件(需有兩相鄰測站觸發)
+2024-10-13
+[new]建立新檔案「RFPLUS3」取代原檔案
+[new]新增震央定位算法
+2025-01-19
+[new]新增RFPLUS3規模計算
+2025-01-21
+[change]將RFPLUS2和RFPLUS3分離成兩個獨立檔案
+[new]將所有測站皆納入地震定位的參考測站
+2025-01-30
+[new]使用MAD filter過濾定位結果異常的資料
