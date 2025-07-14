@@ -219,7 +219,7 @@ let alert_list_before = []
 let noTriggerCount = 0;
 
 const getEEW = setInterval(()=>{
-    conn2.query('SELECT * FROM station_list WHERE region != "JP" AND region != "CN" AND active = 1', function(err, rows, fields) {
+    conn2.query('SELECT * FROM station_list WHERE region != "JP" AND region != "CN" AND active = 1 AND sensitiveStation = 0', function(err, rows, fields) {
         if (err) {
             console.error('SQL query error:', err);
             return;
