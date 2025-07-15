@@ -2,6 +2,47 @@ var mysql = require('mysql');
 var fs = require('fs');
 const path = require("path")
 const numeric = require('numeric');
+const fetch = require('node-fetch');
+const xml2js = require('xml2js');
+
+async function getTownFromLatLon(lat, lon) {
+  const url = `https://api.nlsc.gov.tw/other/TownVillagePointQuery?x=${lon}&y=${lat}`;
+
+  try {
+    const response = await fetch(url);
+    const xml = await response.text();
+    const result = await xml2js.parseStringPromise(xml);
+    const item = result.townVillageItem;
+
+    const ctyName = item.ctyName?.[0];
+    const townName = item.townName?.[0];
+
+    if (ctyName && townName) {
+      return ctyName + townName;
+    } else {
+      return classifySeaArea(lat, lon);
+    }
+  } catch (error) {
+    console.error('取得行政區失敗:', error);
+    return classifySeaArea(lat, lon);
+  }
+}
+
+// 備援：依照經緯度分類海域
+function classifySeaArea(lat, lon) {
+  if (lat >= 23 && lat <= 25) {
+    if (lon <= 121.1) return '臺灣西部海域';
+    else return '臺灣東部海域';
+  } else if (lat < 23) {
+    if (lon > 120.8) return '臺灣東南部海域';
+    else return '臺灣西南部海域';
+  } else if (lat > 25) {
+    if (lon > 121.5) return '臺灣東北部海域';
+    else return '臺灣西北部海域';
+  }
+  return '未知區域';
+}
+
 function distanceCaculator(Xlat,Xlon,Ylat,Ylon){
     const dx = (Ylat - Xlat) * 111;
     const dy = (Ylon - Xlon) * 101;
@@ -424,14 +465,32 @@ const getEEW = setInterval(()=>{
                     }
                     EEW_tmp["scale"] = scale / scaleTimes;
 
-                    //----------有前報 設為更新報----------//
-                    if(EEW["report_num"] != 0){
-                        //如果計算結果有變動 更新報
-                        if(EEW_tmp["center"]["lat"] != EEW["center"]["lat"] || EEW_tmp["center"]["lon"] != EEW["center"]["lon"] || Math.round(EEW_tmp["scale"]) != Math.round(EEW["scale"])){
-                            let report_num = EEW["report_num"] + 1;
-                            let id = EEW["id"]
-                            EEW_tmp["report_num"] = report_num;
-                            EEW_tmp["id"] = id;
+                    //----------取得震央名稱----------//
+                    getTownFromLatLon(EEW_tmp["center"]["lat"], EEW_tmp["center"]["lon"]).then(cname => {
+
+                        EEW_tmp["center"]["cname"] = cname;
+                        //----------有前報 設為更新報----------//
+                        if(EEW["report_num"] != 0){
+                            //如果計算結果有變動 更新報
+                            if(EEW_tmp["center"]["lat"] != EEW["center"]["lat"] || EEW_tmp["center"]["lon"] != EEW["center"]["lon"] || Math.round(EEW_tmp["scale"]) != Math.round(EEW["scale"])){
+                                let report_num = EEW["report_num"] + 1;
+                                let id = EEW["id"]
+                                EEW_tmp["report_num"] = report_num;
+                                EEW_tmp["id"] = id;
+                                EEW = EEW_tmp;
+                                console.log(allResults);
+                                console.log(JSON.stringify(EEW));
+                                fs.writeFile("RFPLUS3_record/"+Date.now().toString()+".json", JSON.stringify(EEW), (err) => {
+                                    if (err) {
+                                        console.error('There is an error while writing RFPLUS file:', err);
+                                    }
+                                });
+                                //writeStream.write(`${JSON.stringify(RFPLUS)}\n`);
+                            }
+                        //----------設為第一報----------//
+                        }else{
+                            EEW_tmp["report_num"] = 1;
+                            EEW_tmp["id"] = Date.now().toString();
                             EEW = EEW_tmp;
                             console.log(allResults);
                             console.log(JSON.stringify(EEW));
@@ -442,20 +501,7 @@ const getEEW = setInterval(()=>{
                             });
                             //writeStream.write(`${JSON.stringify(RFPLUS)}\n`);
                         }
-                    //----------設為第一報----------//
-                    }else{
-                        EEW_tmp["report_num"] = 1;
-                        EEW_tmp["id"] = Date.now().toString();
-                        EEW = EEW_tmp;
-                        console.log(allResults);
-                        console.log(JSON.stringify(EEW));
-                        fs.writeFile("RFPLUS3_record/"+Date.now().toString()+".json", JSON.stringify(EEW), (err) => {
-                            if (err) {
-                                console.error('There is an error while writing RFPLUS file:', err);
-                            }
-                        });
-                        //writeStream.write(`${JSON.stringify(RFPLUS)}\n`);
-                    }
+                    });
 
                 /*----------RFPLUS2----------*/
                 }else if(alert_list.length == 2 && !EEW_lock){
@@ -591,4 +637,4 @@ const getEEW = setInterval(()=>{
             });
         }
     })
-},500)
+},1000)
