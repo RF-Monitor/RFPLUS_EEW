@@ -1,0 +1,8 @@
+version: "3.9"
+services:
+  rfplus3:
+    cpuset: "6"
+    image: rfplus3
+    volumes:
+      - ./src:/app/src
+      - C:/earthquake server/EEW_file:/app/src/EEW_file

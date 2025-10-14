@@ -1,0 +1,11 @@
+FROM node:20
+
+WORKDIR /app
+
+# 複製依賴安裝所需檔案
+COPY package*.json ./
+RUN npm install
+
+WORKDIR /app/src
+# 啟動指令（你的主程式檔案名稱可能是 server.js 或 index.js）
+CMD ["node", "RFPLUS2.js"]
