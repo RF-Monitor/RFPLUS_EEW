@@ -1,8 +1,8 @@
-var mysql = require('mysql');
+var mysql = require('mysql2/promise');
 var fs = require('fs');
 const path = require("path")
 const numeric = require('numeric');
-const fetch = require('node-fetch');
+//const fetch = require('node-fetch');
 const xml2js = require('xml2js');
 
 async function getTownFromLatLon(lat, lon) {
@@ -132,6 +132,23 @@ function removeOutliers(arr) {
 const writeStream = fs.createWriteStream(path.join(__dirname, './alert.log'), { flags: 'a' });
 filePath = "EEW_file/RFPLUS3.txt"
 
+conn_record = mysql.createPool({
+    host: 'host.docker.internal',
+    user: 'ws',
+    password: '',
+    database:'RFPLUS_record',
+    port: 3306,
+    waitForConnections: true,
+})
+conn2 = mysql.createPool({
+    host: 'host.docker.internal',
+    user: 'ws',
+    password: '',
+    database:'pga',
+    port: 3306,
+    waitForConnections: true,
+});
+/*
 function handleDisconnect_conn2() {
     conn2 = mysql.createConnection({
         host: 'host.docker.internal',
@@ -171,7 +188,7 @@ function handleDisconnect_conn2() {
     });
 }
 
-handleDisconnect_conn2()
+handleDisconnect_conn2()*/
 
 function calculateM(C, D) {
     // 確保 D 和 C 的值有效
@@ -269,141 +286,143 @@ let EEW_lock = false;
 let final = false //當為true時停止計算，並發布發布最終報
 let alert_list_before = []
 let noTriggerCount = 0;
+let running = false;
+const getEEW = setInterval(async ()=>{
+    if (running) return; // 上次還沒跑完，跳過
+    running = true;
+    const [rows] = await conn2.query('SELECT * FROM station_list WHERE region != "JP" AND region != "CN" AND active = 1 AND sensitiveStation = 0')
+    if (0) {
+        console.error('SQL query error:', err);
+        running = false;
+        return;
+    }else{
+        let time_now = Date.now();
+        let alert_list = [];//RFPLUS3 測站列表
+        let triggered = false;
+        /*----------篩選測站----------*/
+        for(let i = 0; i<rows.length; i++){
 
-const getEEW = setInterval(()=>{
-    conn2.query('SELECT * FROM station_list WHERE region != "JP" AND region != "CN" AND active = 1 AND sensitiveStation = 0', function(err, rows, fields) {
-        if (err) {
-            console.error('SQL query error:', err);
-            return;
-        }else{
-            let time_now = Date.now();
-            let alert_list = [];//RFPLUS3 測站列表
-            let triggered = false;
-            /*----------篩選測站----------*/
-            for(let i = 0; i<rows.length; i++){
+            //檢查是否觸發或是否已離線
+            if(rows[i]["alert"] && time_now - rows[i]["timestamp"] <= 5000){
+                triggered = true;
 
-                //檢查是否觸發或是否已離線
-                if(rows[i]["alert"] && time_now - rows[i]["timestamp"] <= 5000){
-                    triggered = true;
+                //檢查是否已經在觸發列表內
+                for(let j = 0;j < alert_list_before.length; j++){
+                    if(alert_list_before[j]["id"] == rows[i]["id"]){//在觸發列表內
 
-                    //檢查是否已經在觸發列表內
-                    for(let j = 0;j < alert_list_before.length; j++){
-                        if(alert_list_before[j]["id"] == rows[i]["id"]){//在觸發列表內
-
-                            //檢查PGA是否降低
-                            if(parseFloat(rows[i]["pga_origin_15"]) < parseFloat(alert_list_before[j]["pga_origin_15"])){//PGA降低
-                                final = true; //收斂地震，停止計算，發布最終報
-                            }
+                        //檢查PGA是否降低
+                        if(parseFloat(rows[i]["pga_origin_15"]) < parseFloat(alert_list_before[j]["pga_origin_15"])){//PGA降低
+                            final = true; //收斂地震，停止計算，發布最終報
                         }
                     }
+                }
 
-                    //檢查是否已經在定位用測站列表內
-                    let inList = false;
-                    let triggerTime = 0
-                    for (let j = 0; j < alert_list_before.length; j++) {
-                        if (alert_list_before[j]["id"] == rows[i]["id"]) { // 在觸發列表內
-                            inList = true;
-                            triggerTime = alert_list_before[j]["triggerTime"];
-                            alert_list_before.splice(j, 1); // 刪除該元素
-                            break; // 防止繼續迴圈導致索引錯亂
-                        }
-                    }
-                    //若為新測站，則標記觸發時間為現在
-                    if(inList){
-                        let data = rows[i];
-                        data["triggerTime"] = triggerTime;//維持原觸發時間
-                        alert_list.push(data);//加入觸發列表
-                    }else{
-                        let data = rows[i];
-                        data["triggerTime"] = Date.now();//設現在為觸發時間
-                        alert_list.push(data);//加入觸發列表
+                //檢查是否已經在定位用測站列表內
+                let inList = false;
+                let triggerTime = 0
+                for (let j = 0; j < alert_list_before.length; j++) {
+                    if (alert_list_before[j]["id"] == rows[i]["id"]) { // 在觸發列表內
+                        inList = true;
+                        triggerTime = alert_list_before[j]["triggerTime"];
+                        alert_list_before.splice(j, 1); // 刪除該元素
+                        break; // 防止繼續迴圈導致索引錯亂
                     }
                 }
-            }
-
-            //檢查是否有測站已結束晃動
-            if(alert_list_before.length != 0){
-                final = true; //收斂地震，停止計算，發布最終報
-            }
-
-            /*----------等待確認地震結束----------*/
-            if(!triggered){
-                noTriggerCount++;
-                /*----------地震結束 解鎖新報----------*/
-                if(noTriggerCount >= 10){
-                    noTriggerCount = 0;
-                    if(EEW_lock){
-                        console.log("EEW unlocked");
-                    }
-                    RFPLUS_first = 0;
-                    EEW_lock = false;
-                    final = false;
-                    EEW = {
-                        "id":"0",
-                        "type":"none",
-                        "time":0,
-                        "center":{
-                            "lat":0,
-                            "lon":0,
-                            "depth":0,
-                            "cname":""
-                        },
-                        "scale":0,
-                        "rate":0,
-                        "report_num":0,
-                        "final":false
-                    }
+                //若為新測站，則標記觸發時間為現在
+                if(inList){
+                    let data = rows[i];
+                    data["triggerTime"] = triggerTime;//維持原觸發時間
+                    alert_list.push(data);//加入觸發列表
+                }else{
+                    let data = rows[i];
+                    data["triggerTime"] = Date.now();//設現在為觸發時間
+                    alert_list.push(data);//加入觸發列表
                 }
             }
+        }
+        //檢查是否有測站已結束晃動
+        if(alert_list_before.length != 0){
+            final = true; //收斂地震，停止計算，發布最終報
+        }
+
+        /*----------等待確認地震結束----------*/
+        if(!triggered){
+            noTriggerCount++;
+            /*----------地震結束 解鎖新報----------*/
+            if(noTriggerCount >= 10){
+                noTriggerCount = 0;
+                if(EEW_lock){
+                    console.log("EEW unlocked");
+                }
+                RFPLUS_first = 0;
+                EEW_lock = false;
+                final = false;
+                EEW = {
+                    "id":"0",
+                    "type":"none",
+                    "time":0,
+                    "center":{
+                        "lat":0,
+                        "lon":0,
+                        "depth":0,
+                        "cname":""
+                    },
+                    "scale":0,
+                    "rate":0,
+                    "report_num":0,
+                    "final":false
+                }
+            }
+        }
 
             /*----------EEW----------*/
-            if(final && !EEW_lock){
-                console.log("final report");
-                //----------發布最終報----------//
-                if(EEW["id"] != "0"){
-                    let EEW_tmp = EEW;
-                    let report_num = EEW["report_num"] + 1;
-                    EEW_tmp["report_num"] = report_num;
-                    EEW_tmp["final"] = true;
-                    EEW = EEW_tmp;
-                }else{
-                    EEW = {
-                        "id":"0",
-                        "type":"none",
-                        "time":0,
-                        "center":{
-                            "lat":0,
-                            "lon":0,
-                            "depth":0,
-                            "cname":""
-                        },
-                        "scale":0,
-                        "rate":0,
-                        "report_num":0,
-                        "final":false
-                    }
-                }
-                console.log(JSON.stringify(EEW));
-                EEW_lock = true;
+        if(final && !EEW_lock){
+            console.log("final report");
+            //----------發布最終報----------//
+            if(EEW["id"] != "0"){
+                let EEW_tmp = EEW;
+                let report_num = EEW["report_num"] + 1;
+                EEW_tmp["report_num"] = report_num;
+                EEW_tmp["final"] = true;
+                EEW = EEW_tmp;
             }else{
+                EEW = {
+                    "id":"0",
+                    "type":"none",
+                    "time":0,
+                    "center":{
+                        "lat":0,
+                        "lon":0,
+                        "depth":0,
+                        "cname":""
+                    },
+                    "scale":0,
+                    "rate":0,
+                    "report_num":0,
+                    "final":false
+                }
+            }
+            console.log(JSON.stringify(EEW));
+            EEW_lock = true;
+        }else{
 
-                /*----------RFPLUS3----------*/
-                if(alert_list.length >= 3 && !EEW_lock){
-                    //----------平面求解----------//
-                    let centerLat = 0;
-                    let centerLon = 0;
-                    let centerDepth = 10;
-                    let epitime = 0;
-                    let locationTimes = 0;
-                    let allResults = [];
+            /*----------RFPLUS3----------*/
+            if(alert_list.length >= 3 && !EEW_lock){
+                //----------平面求解----------//
+                let centerLat = 0;
+                let centerLon = 0;
+                let centerDepth = 10;
+                let epitime = 0;
+                let locationTimes = 0;
+                let allResults = [];
 
-                    for (let i = 0; i < alert_list.length - 2; i++) {
-                        for (let j = i + 1; j < alert_list.length - 1; j++) {
-                            for (let k = j + 1; k < alert_list.length; k++) {
-                                // 返回優化結果
-                                let result = location(alert_list[i], alert_list[j], alert_list[k]);
-                                allResults.push(result);
-                                /*
+                for (let i = 0; i < alert_list.length - 2; i++) {
+                    for (let j = i + 1; j < alert_list.length - 1; j++) {
+                        for (let k = j + 1; k < alert_list.length; k++) {
+                            // 返回優化結果
+                            let result = location(alert_list[i], alert_list[j], alert_list[k]);
+                            allResults.push(result);
+                            /*
                                 let centerLatTmp = result[0];
                                 let centerLonTmp = result[1];
                                 let timeTmp = alert_list[i]["triggerTime"] / 1000 - (result[2] * waveSPD);
@@ -413,215 +432,206 @@ const getEEW = setInterval(()=>{
                                 epitime = epitime + timeTmp;
                                 locationTimes++;
                                 */
-                            }
                         }
                     }
-                    //----------使用MAD過濾異常值 過濾兩次----------//
-                    for(let i = 0; i < 2; i++){
-                        allResults = removeOutliers(allResults);
-                        console.log(`[RFPLUS3] After filtering, ${allResults.length} valid results remain.`);
-                    }
+                }
+                //----------使用MAD過濾異常值 過濾兩次----------//
+                for(let i = 0; i < 2; i++){
+                    allResults = removeOutliers(allResults);
+                    console.log(`[RFPLUS3] After filtering, ${allResults.length} valid results remain.`);
+                }
                     
-                    for (let i = 0; i < allResults.length; i++) {
-                        let centerLatTmp = allResults[i][0];
-                        let centerLonTmp = allResults[i][1];
-                        let timeTmp = allResults[i][2];
-                        centerLat = centerLat + centerLatTmp;
-                        centerLon = centerLon + centerLonTmp;
-                        epitime = epitime + timeTmp;
-                        locationTimes++;
-                    }
+                for (let i = 0; i < allResults.length; i++) {
+                    let centerLatTmp = allResults[i][0];
+                    let centerLonTmp = allResults[i][1];
+                    let timeTmp = allResults[i][2];
+                    centerLat = centerLat + centerLatTmp;
+                    centerLon = centerLon + centerLonTmp;
+                    epitime = epitime + timeTmp;
+                    locationTimes++;
+                }
 
-                    centerLat = centerLat / locationTimes;
-                    centerLon = centerLon / locationTimes;
-                    epitime = epitime / locationTimes;
+                centerLat = centerLat / locationTimes;
+                centerLon = centerLon / locationTimes;
+                epitime = epitime / locationTimes;
 
-                    let EEW_tmp = {
-                        "type":"RFPLUS3",
-                        "time": epitime,
-                        "center":{
-                            "lat":centerLat,//float
-                            "lon":centerLon,///float
-                            "cname":"",//float
-                            "depth":10
-                        },
-                        "scale":0,
-                        "rate":0,
-                    }
-                    //console.log(JSON.stringify(EEW_tmp));
+                let EEW_tmp = {
+                    "type":"RFPLUS3",
+                    "time": epitime,
+                    "center":{
+                        "lat":centerLat,//float
+                        "lon":centerLon,///float
+                        "cname":"",//float
+                        "depth":10
+                    },
+                    "scale":0,
+                    "rate":0,
+                }
+                //console.log(JSON.stringify(EEW_tmp));
 
-                    //----------計算規模----------//
-                    let scale = 0;
-                    let scaleTimes = 0;
-                    for(let i = 0; i<alert_list.length; i++){
-                        //if(alert_list[i]["id"] != RFPLUS_first["id"]){
-                        if(1){
-                            let pga = 0;
-                            //判斷當下是p波還s波
-                            let pgal = Math.sqrt(parseFloat(alert_list[i]["xo_15"]) * parseFloat(alert_list[i]["xo_15"]) + parseFloat(alert_list[i]["yo_15"]) * parseFloat(alert_list[i]["yo_15"]));
-                            if(parseFloat(alert_list[i]["zo_15"]) >= pgal){
-                                pga = parseFloat(alert_list[i]["pga_origin_15"]) * 3.5;
-                            }else{
-                                pga = parseFloat(alert_list[i]["pga_origin_15"]);
-                            }
-                            
-                            if(1){
-                                let distance = distanceCaculator2(centerLat,centerLon,parseFloat(alert_list[i]["lat"]),parseFloat(alert_list[i]["lon"]),centerDepth);
-                                //let rate_tmp = pga / Math.pow(distance, -1.607);
-                                let scale_tmp = calculateM(pga,distance);
-                                scale = scale + scale_tmp;
-                                scaleTimes++;
-                            } 
-                        }
-                    }
-                    EEW_tmp["scale"] = scale / scaleTimes;
-
-                    //----------取得震央名稱----------//
-                    getTownFromLatLon(EEW_tmp["center"]["lat"], EEW_tmp["center"]["lon"]).then(cname => {
-
-                        EEW_tmp["center"]["cname"] = cname;
-                        //----------有前報 設為更新報----------//
-                        if(EEW["report_num"] != 0){
-                            //如果計算結果有變動 更新報
-                            if(EEW_tmp["center"]["lat"] != EEW["center"]["lat"] || EEW_tmp["center"]["lon"] != EEW["center"]["lon"] || Math.round(EEW_tmp["scale"]) != Math.round(EEW["scale"])){
-                                let report_num = EEW["report_num"] + 1;
-                                let id = EEW["id"]
-                                EEW_tmp["report_num"] = report_num;
-                                EEW_tmp["id"] = id;
-                                EEW = EEW_tmp;
-                                console.log(allResults);
-                                console.log(JSON.stringify(EEW));
-                                fs.writeFile("RFPLUS3_record/"+Date.now().toString()+".json", JSON.stringify(EEW), (err) => {
-                                    if (err) {
-                                        console.error('There is an error while writing RFPLUS file:', err);
-                                    }
-                                });
-                                //writeStream.write(`${JSON.stringify(RFPLUS)}\n`);
-                            }
-                        //----------設為第一報----------//
+                //----------計算規模----------//
+                let scale = 0;
+                let scaleTimes = 0;
+                for(let i = 0; i<alert_list.length; i++){
+                    //if(alert_list[i]["id"] != RFPLUS_first["id"]){
+                    if(1){
+                        let pga = 0;
+                        //判斷當下是p波還s波
+                        let pgal = Math.sqrt(parseFloat(alert_list[i]["xo_15"]) * parseFloat(alert_list[i]["xo_15"]) + parseFloat(alert_list[i]["yo_15"]) * parseFloat(alert_list[i]["yo_15"]));
+                        if(parseFloat(alert_list[i]["zo_15"]) >= pgal){
+                            pga = parseFloat(alert_list[i]["pga_origin_15"]) * 3.5;
                         }else{
-                            EEW_tmp["report_num"] = 1;
-                            EEW_tmp["id"] = Date.now().toString();
-                            EEW = EEW_tmp;
-                            console.log(allResults);
-                            console.log(JSON.stringify(EEW));
-                            fs.writeFile("RFPLUS3_record/"+Date.now().toString()+".json", JSON.stringify(EEW), (err) => {
-                                if (err) {
-                                    console.error('There is an error while writing RFPLUS file:', err);
-                                }
-                            });
-                            //writeStream.write(`${JSON.stringify(RFPLUS)}\n`);
+                            pga = parseFloat(alert_list[i]["pga_origin_15"]);
+                        }
+                            
+                        if(1){
+                            let distance = distanceCaculator2(centerLat,centerLon,parseFloat(alert_list[i]["lat"]),parseFloat(alert_list[i]["lon"]),centerDepth);
+                            //let rate_tmp = pga / Math.pow(distance, -1.607);
+                            let scale_tmp = calculateM(pga,distance);
+                            scale = scale + scale_tmp;
+                            scaleTimes++;
+                        } 
+                    }
+                }
+                EEW_tmp["scale"] = scale / scaleTimes;
+
+                //----------取得震央名稱----------//
+                const cname = await getTownFromLatLon(EEW_tmp["center"]["lat"], EEW_tmp["center"]["lon"])
+
+                EEW_tmp["center"]["cname"] = cname;
+                //----------有前報 設為更新報----------//
+                if(EEW["report_num"] != 0){
+                    //如果計算結果有變動 更新報
+                    if(EEW_tmp["center"]["lat"] != EEW["center"]["lat"] || EEW_tmp["center"]["lon"] != EEW["center"]["lon"] || Math.round(EEW_tmp["scale"]) != Math.round(EEW["scale"])){
+                        let report_num = EEW["report_num"] + 1;
+                        let id = EEW["id"]
+                        EEW_tmp["report_num"] = report_num;
+                        EEW_tmp["id"] = id;
+                        EEW = EEW_tmp;
+                        console.log(allResults);
+                        console.log(JSON.stringify(EEW));
+                        fs.writeFile("RFPLUS3_record/"+Date.now().toString()+".json", JSON.stringify(EEW), (err) => {
+                            if (err) {
+                                console.error('There is an error while writing RFPLUS file:', err);
+                            }
+                        });
+                        conn_record.query("INSERT INTO reports")
+                        //writeStream.write(`${JSON.stringify(RFPLUS)}\n`);
+                    }
+                //----------設為第一報----------//
+                }else{
+                    EEW_tmp["report_num"] = 1;
+                    EEW_tmp["id"] = Date.now().toString();
+                    EEW = EEW_tmp;
+                    console.log(allResults);
+                    console.log(JSON.stringify(EEW));
+                    fs.writeFile("RFPLUS3_record/"+Date.now().toString()+".json", JSON.stringify(EEW), (err) => {
+                        if (err) {
+                            console.error('There is an error while writing RFPLUS file:', err);
                         }
                     });
-
-                /*----------RFPLUS2----------*/
-                }else if(alert_list.length == 2 && !EEW_lock){
+                            //writeStream.write(`${JSON.stringify(RFPLUS)}\n`);
+                }
                 
-                    //----------計算兩站距離----------//
-                    let stationDistance = distanceCaculator(parseFloat(alert_list[0]["lat"]),parseFloat(alert_list[0]["lon"]),parseFloat(alert_list[1]["lat"]),parseFloat(alert_list[1]["lon"]));
+                //----------寫入警報紀錄----------//
+                
+                    
 
-                    if(stationDistance <= 100){
+            /*----------RFPLUS2----------*/
+            }else if(alert_list.length == 2 && !EEW_lock){
+                
+                //----------計算兩站距離----------//
+                let stationDistance = distanceCaculator(parseFloat(alert_list[0]["lat"]),parseFloat(alert_list[0]["lon"]),parseFloat(alert_list[1]["lat"]),parseFloat(alert_list[1]["lon"]));
 
-                        //----------尋找假定中心(RFPLUS_first)----------//
-                        if(!RFPLUS_first){
-                            let RFPLUS_first_tmp = 0
-                            for(let i = 0;i<alert_list.length;i++){
-                                if(parseFloat(alert_list[i]["pga_origin_15"]) >= 5 && time_now - alert_list[i]["timestamp"] <= 5000){
-                                    if(RFPLUS_first_tmp == 0){
-                                        RFPLUS_first_tmp = alert_list[i];
-                                        RFPLUS_time = alert_list[i]["timestamp"];
-                                        RFPLUS_first_lock = true;
-                                    }else if(parseFloat(alert_list[i]["pga_origin_15"]) > parseFloat(RFPLUS_first_tmp["pga_origin_15"])){
-                                        RFPLUS_first_tmp = alert_list[i];
-                                        RFPLUS_time = alert_list[i]["timestamp"];
-                                        RFPLUS_first_lock = true;
-                                    }
-                                }
-                            }
-                            if(RFPLUS_first_tmp){
-                                console.log("RFPLUS_first checked:" + RFPLUS_first_tmp["name"]);
-                                RFPLUS_first = RFPLUS_first_tmp;
-                            }
+                if(stationDistance <= 100){
 
-                        //----------更新假定中心(RFPLUS_first)----------//
-                        }else{
-                            for(let i = 0;i<alert_list.length;i++){
-                                if(alert_list[i]["id"] == RFPLUS_first["id"]){
-                                    //第一站PGA上升 更新PGA資訊
-                                    if(parseFloat(alert_list[i]["pga_origin_15"]) > parseFloat(RFPLUS_first["pga_origin_15"])){
-                                        RFPLUS_first = alert_list[i];
-                                        console.log("RFPLUS_first updated");
-                                    }
+                    //----------尋找假定中心(RFPLUS_first)----------//
+                    if(!RFPLUS_first){
+                        let RFPLUS_first_tmp = 0
+                        for(let i = 0;i<alert_list.length;i++){
+                            if(parseFloat(alert_list[i]["pga_origin_15"]) >= 5 && time_now - alert_list[i]["timestamp"] <= 5000){
+                                if(RFPLUS_first_tmp == 0){
+                                    RFPLUS_first_tmp = alert_list[i];
+                                    RFPLUS_time = alert_list[i]["timestamp"];
+                                    RFPLUS_first_lock = true;
+                                }else if(parseFloat(alert_list[i]["pga_origin_15"]) > parseFloat(RFPLUS_first_tmp["pga_origin_15"])){
+                                    RFPLUS_first_tmp = alert_list[i];
+                                    RFPLUS_time = alert_list[i]["timestamp"];
+                                    RFPLUS_first_lock = true;
                                 }
                             }
                         }
+                        if(RFPLUS_first_tmp){
+                            console.log("RFPLUS_first checked:" + RFPLUS_first_tmp["name"]);
+                            RFPLUS_first = RFPLUS_first_tmp;
+                        }
 
-                        //----------計算----------//
-                        if(RFPLUS_first){
-                            let scale = 0;
-                            let rate = 0;
-                            let count = 0;
-                            for(let i = 0; i<alert_list.length; i++){
-                            //if(alert_list[i]["id"] != RFPLUS_first["id"]){
-                                if(1){
-                                    //let pga_diff = parseFloat(RFPLUS_first["pga_origin_15"]) - parseFloat(alert_list[i]["pga_origin_15"]);//加速度差
-                                    let pga = 0;
-                                    //判斷當下是p波還s波
-                                    let pgal = Math.sqrt(parseFloat(alert_list[i]["xo_15"]) * parseFloat(alert_list[i]["xo_15"]) + parseFloat(alert_list[i]["yo_15"]) * parseFloat(alert_list[i]["yo_15"]));
-                                    if(parseFloat(alert_list[i]["zo_15"]) >= pgal){
-                                        pga = parseFloat(alert_list[i]["pga_origin_15"]) * 3.5;
-                                    }else{
-                                        pga = parseFloat(alert_list[i]["pga_origin_15"]);
-                                    }
-                                    
-                                    //if(pga_diff > 0){
-                                    if(1){
-                                        let distance = distanceCaculator2(parseFloat(RFPLUS_first["lat"]),parseFloat(RFPLUS_first["lon"]),parseFloat(alert_list[i]["lat"]),parseFloat(alert_list[i]["lon"]),10);
-                                        //let rate_tmp = pga_diff / distance;
-                                        let scale_tmp = calculateM(pga,distance);
-                                        scale = scale + scale_tmp;
-                                        count++;
-                                        console.log(alert_list[i]["name"]);
-                                        console.log(pga);
-                                        console.log(scale_tmp);
-                                    } 
+                            //----------更新假定中心(RFPLUS_first)----------//
+                    }else{
+                        for(let i = 0;i<alert_list.length;i++){
+                            if(alert_list[i]["id"] == RFPLUS_first["id"]){
+                                //第一站PGA上升 更新PGA資訊
+                                if(parseFloat(alert_list[i]["pga_origin_15"]) > parseFloat(RFPLUS_first["pga_origin_15"])){
+                                    RFPLUS_first = alert_list[i];
+                                    console.log("RFPLUS_first updated");
                                 }
                             }
-                            if(count >= 2){//資料有效(有兩站以上的資料)
-                                rate = calculateR(scale / count);
-                                let RFPLUS_tmp = {
-                                    "type":"RFPLUS2",
-                                    "time":RFPLUS_time,
-                                    "center":{
-                                        "lat":parseFloat(RFPLUS_first["lat"]),//float
-                                        "lon":parseFloat(RFPLUS_first["lon"]),///float
-                                        "pga":parseFloat(RFPLUS_first["pga_origin_15"]),//float
-                                        "cname":RFPLUS_first["cname"].replace(" ","")
-                                    },
-                                    "rate":rate,//float
-                                    "scale":0,
-                                    "final":false
-                                }
-                                if(EEW["report_num"] != 0){
-                                    //如果計算結果有變動 更新報
-                                    if(RFPLUS_tmp["center"]["lat"] != EEW["center"]["lat"] || RFPLUS_tmp["center"]["lon"] != EEW["center"]["lon"] || Math.round(RFPLUS_tmp["rate"]) != Math.round(EEW["rate"])){
-                                        let report_num = EEW["report_num"] + 1;
-                                        let id = EEW["id"]
-                                        RFPLUS_tmp["report_num"] = report_num;
-                                        RFPLUS_tmp["id"] = id;
-                                        EEW = RFPLUS_tmp;
-                                        console.log(JSON.stringify(EEW));
-                                        fs.writeFile("RFPLUS3_record/"+Date.now().toString()+".json", JSON.stringify(EEW), (err) => {
-                                            if (err) {
-                                            console.error('There is an error while writing RFPLUS file:', err);
-                                            }
-                                        });
-                                        //writeStream.write(`${JSON.stringify(RFPLUS)}\n`);
-                                    }
-                                //設為第一報
+                        }
+                    }
+
+                    //----------計算----------//
+                    if(RFPLUS_first){
+                        let scale = 0;
+                        let rate = 0;
+                        let count = 0;
+                        for(let i = 0; i<alert_list.length; i++){
+                        //if(alert_list[i]["id"] != RFPLUS_first["id"]){
+                            if(1){
+                                //let pga_diff = parseFloat(RFPLUS_first["pga_origin_15"]) - parseFloat(alert_list[i]["pga_origin_15"]);//加速度差
+                                let pga = 0;
+                                //判斷當下是p波還s波
+                                let pgal = Math.sqrt(parseFloat(alert_list[i]["xo_15"]) * parseFloat(alert_list[i]["xo_15"]) + parseFloat(alert_list[i]["yo_15"]) * parseFloat(alert_list[i]["yo_15"]));
+                                if(parseFloat(alert_list[i]["zo_15"]) >= pgal){
+                                    pga = parseFloat(alert_list[i]["pga_origin_15"]) * 3.5;
                                 }else{
-                                    RFPLUS_tmp["report_num"] = 1;
-                                    RFPLUS_tmp["id"] = RFPLUS_time.toString();
+                                    pga = parseFloat(alert_list[i]["pga_origin_15"]);
+                                }
+                                        
+                                //if(pga_diff > 0){
+                                if(1){
+                                    let distance = distanceCaculator2(parseFloat(RFPLUS_first["lat"]),parseFloat(RFPLUS_first["lon"]),parseFloat(alert_list[i]["lat"]),parseFloat(alert_list[i]["lon"]),10);
+                                    //let rate_tmp = pga_diff / distance;
+                                    let scale_tmp = calculateM(pga,distance);
+                                    scale = scale + scale_tmp;
+                                    count++;
+                                    console.log(alert_list[i]["name"]);
+                                    console.log(pga);
+                                    console.log(scale_tmp);
+                                } 
+                            }
+                        }
+                        if(count >= 2){//資料有效(有兩站以上的資料)
+                            rate = calculateR(scale / count);
+                            let RFPLUS_tmp = {
+                                        "type":"RFPLUS2",
+                                        "time":RFPLUS_time,
+                                        "center":{
+                                            "lat":parseFloat(RFPLUS_first["lat"]),//float
+                                            "lon":parseFloat(RFPLUS_first["lon"]),///float
+                                            "pga":parseFloat(RFPLUS_first["pga_origin_15"]),//float
+                                            "cname":RFPLUS_first["cname"].replace(" ","")
+                                },
+                                        "rate":rate,//float
+                                        "scale":0,
+                                        "final":false
+                            }
+                            if(EEW["report_num"] != 0){
+                                //如果計算結果有變動 更新報
+                                if(RFPLUS_tmp["center"]["lat"] != EEW["center"]["lat"] || RFPLUS_tmp["center"]["lon"] != EEW["center"]["lon"] || Math.round(RFPLUS_tmp["rate"]) != Math.round(EEW["rate"])){
+                                    let report_num = EEW["report_num"] + 1;
+                                    let id = EEW["id"]
+                                    RFPLUS_tmp["report_num"] = report_num;
+                                    RFPLUS_tmp["id"] = id;
                                     EEW = RFPLUS_tmp;
                                     console.log(JSON.stringify(EEW));
                                     fs.writeFile("RFPLUS3_record/"+Date.now().toString()+".json", JSON.stringify(EEW), (err) => {
@@ -631,21 +641,33 @@ const getEEW = setInterval(()=>{
                                     });
                                     //writeStream.write(`${JSON.stringify(RFPLUS)}\n`);
                                 }
+                            //設為第一報
+                            }else{
+                                RFPLUS_tmp["report_num"] = 1;
+                                RFPLUS_tmp["id"] = RFPLUS_time.toString();
+                                EEW = RFPLUS_tmp;
+                                console.log(JSON.stringify(EEW));
+                                fs.writeFile("RFPLUS3_record/"+Date.now().toString()+".json", JSON.stringify(EEW), (err) => {
+                                    if (err) {
+                                    console.error('There is an error while writing RFPLUS file:', err);
+                                    }
+                                });
+                                //writeStream.write(`${JSON.stringify(RFPLUS)}\n`);
                             }
                         }
                     }
                 }
             }
-
-            alert_list_before = alert_list;
-            alert_list = [];
-            /*----------生成速報檔案----------*/
-            fs.writeFile(path.join(__dirname, filePath), JSON.stringify(EEW), (err) => {
-                
-                if (err) {
-                console.error('There is an error while writing RFPLUS file:', err);
-                }
-            });
         }
-    })
+
+        alert_list_before = alert_list;
+        alert_list = [];
+        /*----------生成速報檔案----------*/
+        fs.writeFile(path.join(__dirname, filePath), JSON.stringify(EEW), (err) => {
+            if (err) {
+                console.error('There is an error while writing RFPLUS file:', err);
+            }
+        });
+    }
+    running = false;
 },1000)
