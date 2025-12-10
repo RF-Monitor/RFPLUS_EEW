@@ -136,10 +136,11 @@ conn_record = mysql.createPool({
     host: 'host.docker.internal',
     user: 'ws',
     password: '',
-    database:'RFPLUS_record',
+    database:'rfplus',
     port: 3306,
     waitForConnections: true,
 })
+console.log('Connected to MySQLL record DB');
 conn2 = mysql.createPool({
     host: 'host.docker.internal',
     user: 'ws',
@@ -148,6 +149,7 @@ conn2 = mysql.createPool({
     port: 3306,
     waitForConnections: true,
 });
+console.log('Connected to MySQLL pga DB');
 /*
 function handleDisconnect_conn2() {
     conn2 = mysql.createConnection({
@@ -332,10 +334,12 @@ const getEEW = setInterval(async ()=>{
                 if(inList){
                     let data = rows[i];
                     data["triggerTime"] = triggerTime;//維持原觸發時間
+                    data["isNew"] = false;
                     alert_list.push(data);//加入觸發列表
                 }else{
                     let data = rows[i];
                     data["triggerTime"] = Date.now();//設現在為觸發時間
+                    data["isNew"] = true;
                     alert_list.push(data);//加入觸發列表
                 }
             }
@@ -515,8 +519,35 @@ const getEEW = setInterval(async ()=>{
                                 console.error('There is an error while writing RFPLUS file:', err);
                             }
                         });
-                        conn_record.query("INSERT INTO reports")
-                        //writeStream.write(`${JSON.stringify(RFPLUS)}\n`);
+                        // 儲存紀錄
+                        await conn_record.query("INSERT INTO rfplus_reports VALUES (?,?,?,?,?,?,?,FROM_UNIXTIME(?),FROM_UNIXTIME(?),FROM_UNIXTIME(?))",[
+                            EEW.id,
+                            EEW.report_num,
+                            EEW.center.scale,
+                            EEW.center.lat,
+                            EEW.center.lon,
+                            EEW.center.depth,
+                            EEW.center.cname,
+                            EEW.time / 1000,
+                            Date.now / 1000,
+                            Date.now / 1000
+                        ]);
+                        const values = alert_list.map(item => [
+                            EEW.id,
+                            item.report_num,
+                            item.id,
+                            item.stationName,
+                            parseFloat(item.lat),
+                            parseFloat(item.lon),
+                            parseFloat(item.pga_origin_15),
+                            item.shindo_15,
+                            item.isNew
+                        ]);
+                        const sql = `
+                            INSERT INTO rfplus_triggered_stations
+                            VALUES ?
+                        `;
+                        await conn_record.query(sql, [values]);
                     }
                 //----------設為第一報----------//
                 }else{
@@ -530,12 +561,36 @@ const getEEW = setInterval(async ()=>{
                             console.error('There is an error while writing RFPLUS file:', err);
                         }
                     });
-                            //writeStream.write(`${JSON.stringify(RFPLUS)}\n`);
-                }
-                
-                //----------寫入警報紀錄----------//
-                
-                    
+                    // 儲存紀錄
+                    await conn_record.query("INSERT INTO rfplus_reports VALUES (?,?,?,?,?,?,?,FROM_UNIXTIME(?),FROM_UNIXTIME(?),FROM_UNIXTIME(?))",[
+                            EEW.id,
+                            EEW.report_num,
+                            EEW.center.scale,
+                            EEW.center.lat,
+                            EEW.center.lon,
+                            EEW.center.depth,
+                            EEW.center.cname,
+                            EEW.time / 1000,
+                            Date.now / 1000,
+                            Date.now / 1000
+                    ]);
+                    const values = alert_list.map(item => [
+                        EEW.id,
+                        item.report_num,
+                        item.id,
+                        item.stationName,
+                        parseFloat(item.lat),
+                        parseFloat(item.lon),
+                        parseFloat(item.pga_origin_15),
+                        item.shindo_15,
+                        item.isNew
+                    ]);
+                    const sql = `
+                        INSERT INTO rfplus_triggered_stations
+                        VALUES ?
+                    `;
+                    await conn_record.query(sql, [values]);
+                }   
 
             /*----------RFPLUS2----------*/
             }else if(alert_list.length == 2 && !EEW_lock){
