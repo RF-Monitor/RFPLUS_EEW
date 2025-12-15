@@ -523,14 +523,14 @@ const getEEW = setInterval(async ()=>{
                         await conn_record.query("INSERT INTO rfplus_reports VALUES (?,?,?,?,?,?,?,FROM_UNIXTIME(?),FROM_UNIXTIME(?),FROM_UNIXTIME(?))",[
                             EEW.id,
                             EEW.report_num,
-                            EEW.center.scale,
+                            EEW.scale,
                             EEW.center.lat,
                             EEW.center.lon,
                             EEW.center.depth,
                             EEW.center.cname,
                             EEW.time / 1000,
-                            Date.now / 1000,
-                            Date.now / 1000
+                            Date.now() / 1000,
+                            Date.now() / 1000
                         ]);
                         const values = alert_list.map(item => [
                             EEW.id,
@@ -565,14 +565,14 @@ const getEEW = setInterval(async ()=>{
                     await conn_record.query("INSERT INTO rfplus_reports VALUES (?,?,?,?,?,?,?,FROM_UNIXTIME(?),FROM_UNIXTIME(?),FROM_UNIXTIME(?))",[
                             EEW.id,
                             EEW.report_num,
-                            EEW.center.scale,
+                            EEW.scale,
                             EEW.center.lat,
                             EEW.center.lon,
                             EEW.center.depth,
                             EEW.center.cname,
                             EEW.time / 1000,
-                            Date.now / 1000,
-                            Date.now / 1000
+                            Date.now() / 1000,
+                            Date.now() / 1000
                     ]);
                     const values = alert_list.map(item => [
                         EEW.id,
