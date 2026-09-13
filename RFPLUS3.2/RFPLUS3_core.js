@@ -6,13 +6,13 @@ function residuals(p, x_a, x_b, x_c, y_a, y_b, y_c, d_a, d_b, d_c) {
     let [m, n, x] = p;
     
     // 方程 1: P 到 A 的距離
-    let eq1 = utils.distanceCaculator(m,n,x_a,y_a) - (x + d_a)
+    let eq1 = utils.haversine(m,n,x_a,y_a) - (x + d_a)
 
     // 方程 2: P 到 B 的距離
-    let eq2 = utils.distanceCaculator(m,n,x_b,y_b)- (x + d_b)
+    let eq2 = utils.haversine(m,n,x_b,y_b)- (x + d_b)
 
     // 方程 3: P 到 C 的距離
-    let eq3 = utils.distanceCaculator(m,n,x_c,y_c) - (x + d_c)
+    let eq3 = utils.haversine(m,n,x_c,y_c) - (x + d_c)
 
     // 方程 4: P 到 D 的距離
     //let eq4 = distanceCaculator(m,n,x_d,y_d) - (x + d_d)
