@@ -216,6 +216,7 @@ function calculateR(M) {
 
 function location(a,b,c){
     let f = function(p) {
+        let [m, n, x] = p;
         let x_a = parseFloat(a["lat"])
         let y_a = parseFloat(a["lon"])
         let z_a = 0;
@@ -236,10 +237,16 @@ function location(a,b,c){
         let z_d = 0
         let d_d = (near_center_list[3]["triggerTime"] - near_center_list[0]["triggerTime"]) / 1000 * waveSPD;
         */
-        let residualsArray = residuals(p, x_a, x_b, x_c, y_a, y_b, y_c, d_a, d_b, d_c);
+        let residualsArray = residuals([m, n, x], x_a, x_b, x_c, y_a, y_b, y_c, d_a, d_b, d_c);
         //let x = residuals[3];
-        //let penalty = (x < 0) ? 1000000 : 0;  // 如果x为负数，加大惩罚值
+
         let value = residualsArray.reduce((sum, r) => sum + r * r, 0);
+        let penalty = 0;
+        if (m < 20) penalty += (20 - m) ** 2;
+        if (m > 26) penalty += (m - 26) ** 2;
+        if (n < 118) penalty += (118 - n) ** 2;
+        if (n > 124) penalty += (n - 124) ** 2;
+        value += penalty * 1e6;
         return value;
     };
 
@@ -293,7 +300,7 @@ const getEEW = setInterval(async ()=>{
     if (running) return; // 上次還沒跑完，跳過
     running = true;
     const [rows] = await conn2.query('SELECT * FROM station_list WHERE region != "JP" AND region != "CN" AND active = 1 AND sensitiveStation = 0')
-    if (0) {
+        if (0) {
         console.error('SQL query error:', err);
         running = false;
         return;
@@ -439,6 +446,7 @@ const getEEW = setInterval(async ()=>{
                         }
                     }
                 }
+                
                 //----------使用MAD過濾異常值 過濾兩次----------//
                 for(let i = 0; i < 2; i++){
                     allResults = removeOutliers(allResults);
@@ -534,9 +542,9 @@ const getEEW = setInterval(async ()=>{
                         ]);
                         const values = alert_list.map(item => [
                             EEW.id,
-                            item.report_num,
+                            EEW.report_num,
                             item.id,
-                            item.stationName,
+                            item.name,
                             parseFloat(item.lat),
                             parseFloat(item.lon),
                             parseFloat(item.pga_origin_15),
@@ -575,15 +583,15 @@ const getEEW = setInterval(async ()=>{
                             Date.now() / 1000
                     ]);
                     const values = alert_list.map(item => [
-                        EEW.id,
-                        item.report_num,
-                        item.id,
-                        item.stationName,
-                        parseFloat(item.lat),
-                        parseFloat(item.lon),
-                        parseFloat(item.pga_origin_15),
-                        item.shindo_15,
-                        item.isNew
+                            EEW.id,
+                            EEW.report_num,
+                            item.id,
+                            item.name,
+                            parseFloat(item.lat),
+                            parseFloat(item.lon),
+                            parseFloat(item.pga_origin_15),
+                            item.shindo_15,
+                            item.isNew
                     ]);
                     const sql = `
                         INSERT INTO rfplus_triggered_stations
@@ -593,7 +601,7 @@ const getEEW = setInterval(async ()=>{
                 }   
 
             /*----------RFPLUS2----------*/
-            }else if(alert_list.length == 2 && !EEW_lock){
+            }else if(alert_list.length == 2 && !EEW_lock && false){
                 
                 //----------計算兩站距離----------//
                 let stationDistance = distanceCaculator(parseFloat(alert_list[0]["lat"]),parseFloat(alert_list[0]["lon"]),parseFloat(alert_list[1]["lat"]),parseFloat(alert_list[1]["lon"]));
