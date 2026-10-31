@@ -2,74 +2,80 @@ import * as utils from "./utils.js";
 import numeric from "numeric";
 
 /*----------計算三個多項式殘差----------*/
-function residuals(p, x_a, x_b, x_c, y_a, y_b, y_c, d_a, d_b, d_c) {
+function residuals(p, stations) {
     let [m, n, x] = p;
-    
-    // 方程 1: P 到 A 的距離
-    let eq1 = utils.haversine(m,n,x_a,y_a) - (x + d_a)
 
-    // 方程 2: P 到 B 的距離
-    let eq2 = utils.haversine(m,n,x_b,y_b)- (x + d_b)
+    return stations.map(station => {
+        let lat = parseFloat(station.lat);
+        let lon = parseFloat(station.lon);
+        let d = Number(station.d);
 
-    // 方程 3: P 到 C 的距離
-    let eq3 = utils.haversine(m,n,x_c,y_c) - (x + d_c)
-
-    // 方程 4: P 到 D 的距離
-    //let eq4 = distanceCaculator(m,n,x_d,y_d) - (x + d_d)
-    //return [eq1, eq2, eq3, eq4];
-    return [eq1, eq2, eq3];
+        return utils.haversine(m,n,lat,lon) - (x + d);
+    });
 }
 
-/*----------三站定位----------*/
-function location(a,b,c){
-    let waveSPD = 3.5;
+/*----------多站定位----------*/
+function location(stations){
+    if(stations.length < 3) return null;
+
+    let stationData = stations.map(sta => {
+        let waveSPD = 3.5;
+        let triggerTime = Number(sta["triggerTime"]);
+        if(sta["s_timestamp"] > 0){
+            triggerTime = Number(sta["s_timestamp"]);
+        }else if(sta["p_timestamp"] > 0){
+            triggerTime = Number(sta["p_timestamp"]);
+            waveSPD = 6.5;
+        }
+        return {lat: parseFloat(sta["lat"]), lon: parseFloat(sta["lon"]), triggerTime: triggerTime, waveSPD: waveSPD};
+    });
+
+    if(stationData.some(sta => !Number.isFinite(sta.lat) || !Number.isFinite(sta.lon) || !Number.isFinite(sta.triggerTime) || sta.triggerTime <= 0)){
+        return null;
+    }
+
+    const baseStation = stationData[0];
+
     let f = function(p) {
         let [m, n, x] = p;
-        let x_a = parseFloat(a["lat"])
-        let y_a = parseFloat(a["lon"])
-        let z_a = 0;
-        let d_a = 0;
+        let stationToLoc = [];
 
-        let x_b = parseFloat(b["lat"])
-        let y_b = parseFloat(b["lon"])
-        let z_b = 0
-        let d_b = (b["triggerTime"] - a["triggerTime"]) / 1000 * waveSPD; //與a的震央距差(km)
+        for(const sta of stationData){
+            let d = ((sta.triggerTime - baseStation.triggerTime) / 1000 + x / baseStation.waveSPD) * sta.waveSPD - x;
+            stationToLoc.push({lat: sta.lat, lon: sta.lon, d: d});
+        }
 
-        let x_c = parseFloat(c["lat"])
-        let y_c = parseFloat(c["lon"])
-        let z_c = 0
-        let d_c = (c["triggerTime"] - a["triggerTime"]) / 1000 * waveSPD; //與a的震央距差(km)
-        /*
-        let x_d = parseFloat(near_center_list[3]["lat"])
-        let y_d = parseFloat(near_center_list[3]["lon"])
-        let z_d = 0
-        let d_d = (near_center_list[3]["triggerTime"] - near_center_list[0]["triggerTime"]) / 1000 * waveSPD;
-        */
-        let residualsArray = residuals([m, n, x], x_a, x_b, x_c, y_a, y_b, y_c, d_a, d_b, d_c);
-        //let x = residuals[3];
-
+        let residualsArray = residuals([m, n, x], stationToLoc);
         let value = residualsArray.reduce((sum, r) => sum + r * r, 0);
         let penalty = 0;
-        if (m < 20) penalty += (20 - m) ** 2;
-        if (m > 26) penalty += (m - 26) ** 2;
-        if (n < 118) penalty += (118 - n) ** 2;
-        if (n > 124) penalty += (n - 124) ** 2;
+
+        if(m < 20) penalty += (20 - m) ** 2;
+        if(m > 26) penalty += (m - 26) ** 2;
+        if(n < 118) penalty += (118 - n) ** 2;
+        if(n > 124) penalty += (n - 124) ** 2;
+        if(x < 0) penalty += x ** 2;
+
         value += penalty * 1e6;
         return value;
     };
 
-    let initialGuess = [
-        parseFloat(a["lat"]),
-        parseFloat(a["lon"]),
-        10
-    ];
-    // 使用 numeric.js 的最小二乘法來優化
+    let initialGuess = [baseStation.lat, baseStation.lon, 10];
     let result = numeric.uncmin(f, initialGuess);
-    let returnResult = result.solution;
-    returnResult[2] = a["triggerTime"] - (result.solution[2] * 1000)//a觸發時間戳 - 震波行經時間 = 發震時間
+    if(!result.solution || !result.solution.every(Number.isFinite) || !Number.isFinite(result.f)){
+        return null;
+    }
+
+    let returnResult = result.solution.slice();
+    if(returnResult[0] < 20 || returnResult[0] > 26 || returnResult[1] < 118 || returnResult[1] > 124 || returnResult[2] < 0){
+        return null;
+    }
+
+    let distanceA = returnResult[2];
+    returnResult[2] = baseStation.triggerTime - distanceA / baseStation.waveSPD * 1000;
 
     return returnResult;
 }
+
 function distanceToResult(result, sta) {
     const dLat = (result[0] - parseFloat(sta.lat)) * 111;
     const dLon = (result[1] - parseFloat(sta.lon)) * 101;
@@ -275,54 +281,17 @@ export class RFPLUS3{
         let centerLon = 0;
         let centerDepth = 10;
         let epitime = 0;
-        let locationTimes = 0;
-        let allResults = [];
+        
         if(this.alert_list.length >= 3 ){
 
-            //取得所有優化結果
-            for (let i = 0; i < this.alert_list.length - 2; i++) {
-                for (let j = i + 1; j < this.alert_list.length - 1; j++) {
-                    for (let k = j + 1; k < this.alert_list.length; k++) {
-                        // 返回優化結果
-                        let result = location(this.alert_list[i], this.alert_list[j], this.alert_list[k]);
-                        allResults.push(result);
-                    }
-                }
-            }
-            //刪除異常結果(與未觸發站過近，不合理)
-            allResults = filterByNormalStations(
-                allResults,
-                this.alert_list,
-                this.normal_list
-            );
-            console.log(`[RFPLUS3] After normal-station filter: ${allResults.length}`);
-
-            //刪除異常結果(離群)
-            for(let i = 0; i < 2; i++){
-                allResults = removeOutliers(allResults);
-                console.log(`[RFPLUS3] After filtering, ${allResults.length} valid results remain.`);
-            }
-
-            if (allResults.length === 0) {
-                console.warn("[RFPLUS3] All solutions rejected, skipping this round.");
+            let result = location(this.alert_list);
+            if(!result){
+                console.warn("[RFPLUS3] 定位失敗，跳過本輪計算");
                 return 0;
             }
-            
-            //剩餘結果取平均
-            for (let i = 0; i < allResults.length; i++) {
-                let centerLatTmp = allResults[i][0];
-                let centerLonTmp = allResults[i][1];
-                let timeTmp = allResults[i][2];
-                centerLat = centerLat + centerLatTmp;
-                centerLon = centerLon + centerLonTmp;
-                epitime = epitime + timeTmp;
-                locationTimes++;
-            }
-
-            centerLat = centerLat / locationTimes;
-            centerLon = centerLon / locationTimes;
-            epitime = epitime / locationTimes;
-
+            centerLat = result[0]
+            centerLon = result[1]
+            epitime = result[2]
 
             let scale = 0;
             let scaleTimes = 0;
@@ -379,10 +348,8 @@ export class RFPLUS3{
             this.EEW_lock = true;
             console.log("[RFPLUS3]final report");
             if(this.EEW["id"] != "0"){
-                let report_num = this.EEW["report_num"] + 1;
-                this.EEW["report_num"] = report_num;
+                this.EEW["report_num"] += 1;
                 this.EEW["final"] = true;
-                this.EEW = EEW_tmp;
             }else{
                 this.EEW = {
                         "id":"0",
