@@ -57,29 +57,17 @@ export function distanceCaculator3(Xlat,Xlon,Xdepth,Ylat,Ylon,Ydepth){
   
     return Math.sqrt(dx*dx + dy*dy + dz*dz);    
 }
-export function haversine(lat1, lon1, lat2, lon2) {
-    const earthRadius = 6371; // 地球平均半徑，單位 km
-    const toRadians = degree => degree * Math.PI / 180;
 
-    lat1 = toRadians(Number(lat1));
-    lon1 = toRadians(Number(lon1));
-    lat2 = toRadians(Number(lat2));
-    lon2 = toRadians(Number(lon2));
-
-    const deltaLat = lat2 - lat1;
-    const deltaLon = lon2 - lon1;
-
-    const a =
-        Math.sin(deltaLat / 2) ** 2 +
-        Math.cos(lat1) *
-        Math.cos(lat2) *
-        Math.sin(deltaLon / 2) ** 2;
-
-    const centralAngle =
-        2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return earthRadius * centralAngle;
+export function haversine(lat1,lon1,lat2,lon2,depth = 10){
+    const R = 6371;
+    const toRad = Math.PI / 180;
+    const dLat = (lat2 - lat1) * toRad;
+    const dLon = (lon2 - lon1) * toRad;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLon / 2) ** 2;
+    const surfaceDistance = 2 * R * Math.asin(Math.sqrt(Math.max(0,Math.min(1,a))));
+    return Math.hypot(surfaceDistance,depth);
 }
+
 export function calculateM(C, D) {
     // 確保 D 和 C 的值有效
     if (D <= 0 || C <= 0) {
